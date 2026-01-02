@@ -79,7 +79,7 @@ class SystemConfig:
     
     # [QUAN TRỌNG] ĐỊA CHỈ IP CỦA ESP32
     # Bạn phải thay đổi địa chỉ này trùng với IP hiển thị trên Serial Monitor của ESP32
-    ESP32_BASE_URL: str = "http://192.168.1.3"
+    ESP32_BASE_URL: str = "xxx"
     
     # --- THỜI GIAN (TIMING) ---
     POLLING_INTERVAL: int = 4         # Chu kỳ đọc cảm biến (giây)
