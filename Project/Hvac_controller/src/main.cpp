@@ -20,9 +20,9 @@ float humidity = 0.0;
 WebSocketsClient webSocket;
 
 // --- THÔNG TIN KẾT NỐI ---
-const char* WIFI_SSID = "Thien Thu";
-const char* WIFI_PASS = "38955220";
-const char* SERVER_IP = "192.168.1.23"; 
+const char* WIFI_SSID = "xxx";
+const char* WIFI_PASS = "xxx";
+const char* SERVER_IP = "xxxxxx"; 
 const int SERVER_PORT = 8080;            
 
 // Hàm xử lý WebSocket (Giữ nguyên logic của bạn)
@@ -118,4 +118,5 @@ void loop() {
     
     lastTime = millis();
   }
+
 }
