@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Smart Home Hub</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;600&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --primary-color: #00d2ff;
+            --secondary-color: #3a7bd5;
+            --warning-color: #ff9966;
+            --bg-glass: rgba(255, 255, 255, 0.1);
+            --text-color: #ffffff;
+        }
+
+        body {
+            font-family: 'Poppins', sans-serif;
+            background-image: url('https://images.unsplash.com/photo-1558486012-817176f84c6d?q=80&w=2500&auto=format&fit=crop'); 
+            background-size: cover;
+            background-position: center;
+            background-attachment: fixed;
+            color: var(--text-color);
+            margin: 0;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        /* Lớp phủ tối để chữ dễ đọc */
+        .overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.6);
+            z-index: -1;
+        }
+
+        .container {
+            width: 90%;
+            max-width: 500px;
+            background: var(--bg-glass);
+            backdrop-filter: blur(15px);
+            -webkit-backdrop-filter: blur(15px);
+            border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 25px;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 25px;
+        }
+
+        h1 { margin: 0; font-size: 1.5rem; font-weight: 600; }
+        .subtitle { font-size: 0.8rem; opacity: 0.8; }
+
+        /* AI AGENT SECTION */
+        .ai-agent-box {
+            background: rgba(0, 0, 0, 0.3);
+            border-left: 4px solid var(--primary-color);
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+        }
+        .ai-avatar {
+            width: 40px; height: 40px;
+            background: linear-gradient(135deg, #00d2ff, #3a7bd5);
+            border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.2rem;
+        }
+        .ai-content h3 { margin: 0 0 5px 0; font-size: 0.9rem; color: var(--primary-color); }
+        .ai-content p { margin: 0; font-size: 0.85rem; line-height: 1.4; }
+
+        /* SENSOR CARDS */
+        .sensor-row {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+        .sensor-card {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 15px;
+            border-radius: 15px;
+            text-align: center;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .sensor-icon { font-size: 1.5rem; margin-bottom: 10px; }
+        .temp-icon { color: #ff6b6b; }
+        .hum-icon { color: #4ecdc4; }
+        .value { font-size: 1.8rem; font-weight: 600; }
+        .unit { font-size: 1rem; opacity: 0.7; }
+
+        /* CONTROLS */
+        .control-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+        .control-btn {
+            background: rgba(255, 255, 255, 0.1);
+            border: none;
+            padding: 15px;
+            border-radius: 12px;
+            color: white;
+            font-family: inherit;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+        }
+        .control-btn:hover { background: rgba(255, 255, 255, 0.2); }
+        .control-btn.active {
+            background: linear-gradient(135deg, var(--secondary-color), var(--primary-color));
+            box-shadow: 0 0 15px var(--secondary-color);
+        }
+        .btn-icon { font-size: 1.2rem; }
+
+        /* HEALTH TIP */
+        .health-badge {
+            margin-top: 20px;
+            text-align: center;
+            font-size: 0.8rem;
+            opacity: 0.7;
+            font-style: italic;
+        }
+
+    </style>
+</head>
+<body>
+    <div class="overlay"></div>
+    <div class="container">
+        <header>
+            <h1><i class="fas fa-robot"></i> AI Smart Hub</h1>
+            <div class="subtitle">Hệ thống giám sát môi trường thông minh</div>
+        </header>
+
+        <div class="ai-agent-box">
+            <div class="ai-avatar"><i class="fas fa-sparkles"></i></div>
+            <div class="ai-content">
+                <h3>Trợ lý AI phân tích</h3>
+                <p id="ai-message">Đang kết nối tới cảm biến...</p>
+            </div>
+        </div>
+
+        <div class="sensor-row">
+            <div class="sensor-card">
+                <div class="sensor-icon temp-icon"><i class="fas fa-thermometer-half"></i></div>
+                <div class="value" id="temp">--</div>
+                <div class="unit">°C Nhiệt độ</div>
+            </div>
+            <div class="sensor-card">
+                <div class="sensor-icon hum-icon"><i class="fas fa-tint"></i></div>
+                <div class="value" id="hum">--</div>
+                <div class="unit">% Độ ẩm</div>
+            </div>
+        </div>
+
+        <div class="control-grid">
+            <button class="control-btn" id="btn-fan1" onclick="toggleDevice('fan1')">
+                <i class="fas fa-wind btn-icon"></i> Quạt Hút
+            </button>
+            <button class="control-btn" id="btn-mist" onclick="toggleDevice('mist')">
+                <i class="fas fa-spray-can btn-icon"></i> Phun Sương
+            </button>
+            <button class="control-btn" id="btn-heater" onclick="toggleDevice('heater')">
+                <i class="fas fa-fire-alt btn-icon"></i> Sưởi Ấm
+            </button>
+            <button class="control-btn" id="btn-fan2" onclick="toggleDevice('fan2')">
+                <i class="fas fa-fan btn-icon"></i> Quạt Mát
+            </button>
+        </div>
+
+        <div class="health-badge" id="health-tip">
+            <i class="fas fa-heartbeat"></i> Hệ thống đang hoạt động ổn định
+        </div>
+    </div>
+
+    <script>
+        // --- LOGIC AI AGENT GIẢ LẬP ---
+        // (Đây là logic AI chạy cục bộ để đưa ra lời khuyên tức thì)
+        function updateAIAdvice(t, h) {
+            let msg = "";
+            let tip = "";
+
+            if (t > 32) {
+                msg = "Nhiệt độ phòng đang quá cao. Nguy cơ sốc nhiệt.";
+                tip = "Khuyên dùng: Bật quạt mát và uống thêm nước.";
+            } else if (t < 18) {
+                msg = "Trời khá lạnh. Hãy chú ý giữ ấm cơ thể.";
+                tip = "Khuyên dùng: Bật máy sưởi nhẹ và mặc ấm.";
+            } else {
+                msg = "Nhiệt độ ở mức lý tưởng cho cơ thể.";
+                tip = "Không khí trong lành, thích hợp làm việc.";
+            }
+
+            if (h > 80) {
+                msg += " Độ ẩm cao dễ gây nấm mốc.";
+                tip = "Cảnh báo: Vi khuẩn phát triển mạnh. Nên bật hút ẩm/quạt.";
+            } else if (h < 40) {
+                msg += " Không khí quá khô, hại cho da và hô hấp.";
+                tip = "Cảnh báo: Da khô nẻ. Hãy bật phun sương ngay.";
+            }
+
+            // Cập nhật giao diện
+            document.getElementById('ai-message').innerText = msg;
+            document.getElementById('health-tip').innerText = tip;
+        }
+
+        // --- GIAO TIẾP VỚI ESP32 ---
+        function toggleDevice(device) {
+            const btn = document.getElementById('btn-' + device);
+            const isActive = btn.classList.contains('active');
+            const newState = isActive ? 'off' : 'on';
+
+            // Gửi lệnh GET tới ESP32
+            fetch(`/control?device=${device}&state=${newState}`)
+                .then(response => {
+                    if (response.ok) {
+                        if (newState === 'on') btn.classList.add('active');
+                        else btn.classList.remove('active');
+                    }
+                })
+                .catch(err => console.error("Lỗi kết nối:", err));
+        }
+
+        // Hàm cập nhật dữ liệu định kỳ
+        function updateData() {
+            // Trong thực tế bạn gọi API: fetch('/status')...
+            // Ở đây mình giả lập để bạn thấy hiệu ứng ngay
+            // Bạn cần sửa code C++ để trả về JSON tại đường dẫn /status
+            
+            // --- ĐÂY LÀ CODE DEMO (Xóa khi có API thật) ---
+            const mockTemp = (25 + Math.random() * 10).toFixed(1);
+            const mockHum = (40 + Math.random() * 40).toFixed(1);
+            
+            // Cập nhật số liệu
+            document.getElementById('temp').innerText = mockTemp;
+            document.getElementById('hum').innerText = mockHum;
+
+            // Gọi AI phân tích
+            updateAIAdvice(mockTemp, mockHum);
+            // ----------------------------------------------
+        }
+
+        // Cập nhật mỗi 3 giây
+        setInterval(updateData, 3000);
+        updateData(); // Chạy ngay lần đầu
+    </script>
+</body>
+</html>
