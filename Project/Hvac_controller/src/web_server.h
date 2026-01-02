@@ -285,7 +285,7 @@ const char index_html[] PROGMEM = R"rawliteral(
 
         // --- CẤU HÌNH KẾT NỐI AI ---
         // HÃY SỬA IP NÀY THÀNH IP MÁY TÍNH CỦA BẠN
-        const AI_SERVER_URL = "http://192.168.1.6:3000"; 
+        const AI_SERVER_URL = "http://192.168.x.x:3000"; 
         
         let socket = null;
         try {
@@ -524,5 +524,6 @@ void setupWebServer() {
     server.begin();
     Serial.println("[WebServer] Da khoi dong!");
 }
+
 
 #endif
