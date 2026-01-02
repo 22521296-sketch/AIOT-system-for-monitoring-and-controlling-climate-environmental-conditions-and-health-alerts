@@ -25,7 +25,7 @@ const char* WIFI_PASS = "xxx";
 const char* SERVER_IP = "xxxxxx"; 
 const int SERVER_PORT = 8080;            
 
-// Hàm xử lý WebSocket (Giữ nguyên logic của bạn)
+// Hàm xử lý WebSocket
 void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
   switch (type) {
     case WStype_DISCONNECTED:
@@ -58,7 +58,7 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 }
 
 void setup() {
-  // 1. Chống Brownout (Quan trọng)
+  // 1. Chống Brownout 
   WRITE_PERI_REG(RTC_CNTL_BROWN_OUT_REG, 0);
   
   Serial.begin(115200);
@@ -68,7 +68,7 @@ void setup() {
   setupActuators(); 
   setupSensor();    
 
-  // 3. Kết nối WiFi (CHỈ LÀM Ở ĐÂY, KHÔNG LÀM TRONG WEB_SERVER.H NỮA)
+  // 3. Kết nối WiFi
   Serial.print("Ket noi WiFi: ");
   Serial.println(WIFI_SSID);
   
@@ -105,7 +105,6 @@ void loop() {
   static unsigned long lastTime = 0;
   if (millis() - lastTime > 2000) {
     
-    // --- BƯỚC QUAN TRỌNG NHẤT ---
     // 1. Đọc từ cảm biến cập nhật vào biến toàn cục
     readSHT31(temperature, humidity);
 
@@ -120,3 +119,4 @@ void loop() {
   }
 
 }
+
