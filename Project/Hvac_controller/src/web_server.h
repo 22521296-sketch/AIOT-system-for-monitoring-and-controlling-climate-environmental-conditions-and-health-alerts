@@ -280,7 +280,7 @@ const char index_html[] PROGMEM = R"rawliteral(
         var lastTemp = null;
         var lastHum = null;
 
-        // [QUAN TRỌNG] Đã thêm biến deviceStates để lưu trạng thái nút bấm
+        // biến deviceStates để lưu trạng thái nút bấm
         const deviceStates = { fan1: false, fan2: false, mist: false, heater: false };
 
         // --- CẤU HÌNH KẾT NỐI AI ---
@@ -392,7 +392,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             w.style.display = w.style.display === "flex" ? "none" : "flex";
         }
 
-        // --- 5. HÀM ĐIỀU KHIỂN THIẾT BỊ (ĐÃ SỬA LỖI) ---
+        // --- 5. HÀM ĐIỀU KHIỂN THIẾT BỊ ---
         function toggleDevice(device) {
             // Đảo trạng thái logic
             const newState = !deviceStates[device];
@@ -527,3 +527,4 @@ void setupWebServer() {
 
 
 #endif
+
