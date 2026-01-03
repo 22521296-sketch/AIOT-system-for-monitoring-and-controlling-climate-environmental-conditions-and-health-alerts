@@ -39,6 +39,9 @@ import random
 import io
 import time
 import math
+import pickle
+import glob
+
 from datetime import datetime
 from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Any, Optional, Tuple, Union
@@ -79,7 +82,7 @@ class SystemConfig:
     
     # [QUAN TRỌNG] ĐỊA CHỈ IP CỦA ESP32
     # Bạn phải thay đổi địa chỉ này trùng với IP hiển thị trên Serial Monitor của ESP32
-    ESP32_BASE_URL: str = "xxx"
+    ESP32_BASE_URL: str = "http://192.168.1.18"
     
     # --- THỜI GIAN (TIMING) ---
     POLLING_INTERVAL: int = 4         # Chu kỳ đọc cảm biến (giây)
@@ -178,115 +181,223 @@ class LogSystem:
 class EcoBrain:
     """
     Class chịu trách nhiệm xử lý dữ liệu CSV/Excel và huấn luyện mô hình.
-    Sử dụng RandomForestRegressor để dự đoán xu hướng.
+    Cải tiến: Tự động chuẩn hóa tên cột và tối ưu hóa tham số học.
     """
     def __init__(self):
-        self.regressor = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+        # Tăng n_estimators để cây quyết định ổn định hơn
+        self.regressor = RandomForestRegressor(n_estimators=200, max_depth=10, random_state=42, n_jobs=-1)
         self.scaler = StandardScaler()
         self.is_trained = False
         self.training_stats = {}
         
-        # Tạo thư mục lưu trữ nếu chưa có
         if not os.path.exists(CONFIG.DATASET_DIR):
             os.makedirs(CONFIG.DATASET_DIR)
+            
+        self.load_model()
 
     def ingest_data(self, filename: str, content: str) -> Dict[str, Any]:
-        """
-        Nhận dữ liệu thô (string), parse thành DataFrame và training.
-        """
-        LogSystem.ai(f"Đang phân tích file dữ liệu: {filename}...")
-        
+        """Nhận dữ liệu upload và lưu file."""
+        LogSystem.ai(f"Đang tiếp nhận dữ liệu mới: {filename}...")
         try:
-            # 1. Parsing Data
-            df = self._parse_content(filename, content)
-            if df is None:
-                return {"success": False, "message": "Định dạng file không hợp lệ (Dùng CSV/Excel)."}
+            file_path = os.path.join(CONFIG.DATASET_DIR, filename)
+            if isinstance(content, str):
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+            else:
+                with open(file_path, "wb") as f:
+                    f.write(content)
+            return self.train_model()
+        except Exception as e:
+            LogSystem.error(f"Lỗi khi lưu dữ liệu: {str(e)}")
+            return {"success": False, "message": f"Lỗi nội bộ: {str(e)}"}
 
-            # 2. Cleaning Data
-            df = self._clean_data(df)
-            if df.empty or len(df) < CONFIG.MIN_SAMPLES_FOR_TRAIN:
-                return {"success": False, "message": f"Dữ liệu quá ít (< {CONFIG.MIN_SAMPLES_FOR_TRAIN} mẫu)."}
+    def train_model(self) -> Dict[str, Any]:
+        """
+        Hàm huấn luyện: Ưu tiên sử dụng cột 'Next_Temp' có sẵn trong CSV.
+        """
+        LogSystem.ai("Bắt đầu quy trình tái huấn luyện (Retraining)...")
+        
+        all_dfs = []
+        files = glob.glob(os.path.join(CONFIG.DATASET_DIR, "*.*"))
+        
+        if not files:
+            return {"success": False, "message": "Chưa có dữ liệu trong bộ nhớ."}
 
-            # 3. Feature Engineering (Tạo dữ liệu để học)
-            # Học mối quan hệ: (Temp hiện tại, Hum hiện tại) -> (Temp tương lai)
-            df['Next_Temp'] = df['Temperature'].shift(-1)
-            df.dropna(inplace=True)
+        for file_path in files:
+            try:
+                if file_path.endswith(".csv") or file_path.endswith(".txt"):
+                    df = pd.read_csv(file_path)
+                    all_dfs.append(df)
+                elif "xls" in file_path:
+                    df = pd.read_excel(file_path)
+                    all_dfs.append(df)
+            except Exception as e:
+                LogSystem.warning(f"Không thể đọc file {file_path}: {e}")
 
-            # 4. Training
-            X = df[['Temperature', 'Humidity']]
-            y = df['Next_Temp']
+        if not all_dfs:
+            return {"success": False, "message": "Không đọc được dữ liệu hợp lệ nào."}
+
+        full_df = pd.concat(all_dfs, ignore_index=True)
+
+        # Làm sạch dữ liệu
+        clean_df = self._clean_data(full_df)
+        
+        if len(clean_df) < CONFIG.MIN_SAMPLES_FOR_TRAIN:
+            return {"success": False, "message": f"Dữ liệu quá ít (< {CONFIG.MIN_SAMPLES_FOR_TRAIN} mẫu)."}
+
+        # --- LOGIC QUAN TRỌNG: XÁC ĐỊNH LABEL (Y) ---
+        # Nếu trong file CSV đã có cột 'Next_Temp' (như file dataset của bạn), ta dùng nó luôn.
+        # Nếu không có, ta mới dùng hàm shift(-1) để tự sinh dữ liệu.
+        if 'Next_Temp' in clean_df.columns:
+            # Xóa các dòng mà Next_Temp bị rỗng (nếu có)
+            clean_df.dropna(subset=['Next_Temp'], inplace=True)
+            LogSystem.ai("Phát hiện dữ liệu chuẩn (có Next_Temp). Đang học theo file...")
+        else:
+            # Tự động tính Next_Temp bằng cách lấy dòng tiếp theo
+            clean_df['Next_Temp'] = clean_df['Temperature'].shift(-1)
+            clean_df.dropna(inplace=True)
+            LogSystem.ai("Dữ liệu thô (chưa có Next_Temp). Đang tự tính toán dòng thời gian...")
+
+        # Training
+        try:
+            X = clean_df[['Temperature', 'Humidity']]
+            y = clean_df['Next_Temp']
             
             self.scaler.fit(X)
             X_scaled = self.scaler.transform(X)
             
             self.regressor.fit(X_scaled, y)
             self.is_trained = True
+            self.save_model()
 
-            # 5. Calculate Statistics
             stats = {
-                "samples": len(df),
-                "avg_temp": round(df['Temperature'].mean(), 2),
-                "avg_hum": round(df['Humidity'].mean(), 2),
-                "max_temp": df['Temperature'].max(),
-                "correlation": round(df['Temperature'].corr(df['Humidity']), 2)
+                "total_files": len(files),
+                "total_samples": len(clean_df),
+                "avg_temp": round(clean_df['Temperature'].mean(), 2),
+                "score": round(self.regressor.score(X_scaled, y), 4)
             }
             self.training_stats = stats
-            
-            LogSystem.success(f"Training hoàn tất! Đã học {len(df)} mẫu dữ liệu.")
-            return {"success": True, "message": "AI đã học xong dữ liệu mới.", "stats": stats}
+            LogSystem.success(f"Training hoàn tất! R2 Score: {stats['score']}")
+            return {"success": True, "message": "AI đã cập nhật kiến thức thành công.", "stats": stats}
 
         except Exception as e:
-            LogSystem.error(f"Lỗi trong quá trình học: {str(e)}")
-            return {"success": False, "message": f"Lỗi nội bộ: {str(e)}"}
+            LogSystem.error(f"Lỗi Training: {e}")
+            return {"success": False, "message": str(e)}
 
-    def _parse_content(self, filename: str, content: str) -> Optional[pd.DataFrame]:
+        # --- FEATURE ENGINEERING (TẠO ĐẶC TRƯNG ĐỂ HỌC) ---
+        # AI học: (Temp hiện tại, Hum hiện tại) -> (Temp tương lai)
+        # Shift(-1) nghĩa là lấy giá trị của dòng tiếp theo làm mục tiêu (Label)
+        clean_df['Target_Next_Temp'] = clean_df['Temperature'].shift(-1)
+        
+        # Loại bỏ dòng cuối cùng (vì không có dữ liệu tương lai)
+        clean_df.dropna(inplace=True)
+
         try:
-            if filename.endswith('.csv') or filename.endswith('.txt'):
-                return pd.read_csv(io.StringIO(content))
-            elif filename.endswith('.xlsx') or filename.endswith('.xls'):
-                # Xử lý binary stream giả lập cho Excel
-                return pd.read_excel(io.BytesIO(content.encode('latin1')))
-            return None
-        except Exception:
-            return None
+            X = clean_df[['Temperature', 'Humidity']]
+            y = clean_df['Target_Next_Temp']
+            
+            self.scaler.fit(X)
+            X_scaled = self.scaler.transform(X)
+            
+            self.regressor.fit(X_scaled, y)
+            self.is_trained = True
+            self.save_model()
+
+            stats = {
+                "total_samples": len(clean_df),
+                "accuracy_score": round(self.regressor.score(X_scaled, y) * 100, 2), # % độ chính xác
+                "message": f"Đã học xong quy luật biến đổi nhiệt độ từ {len(clean_df)} mẫu dữ liệu."
+            }
+            LogSystem.success(f"Training xong! Độ chính xác mô hình: {stats['accuracy_score']}%")
+            return {"success": True, "message": stats['message'], "stats": stats}
+
+        except Exception as e:
+            LogSystem.error(f"Lỗi Training: {e}")
+            return {"success": False, "message": str(e)}
 
     def _clean_data(self, df: pd.DataFrame) -> pd.DataFrame:
-        # Chuẩn hóa tên cột
-        df.columns = [c.strip().title() for c in df.columns]
+        # 1. Chuẩn hóa tên cột: Xóa khoảng trắng và đưa về chữ thường để dễ xử lý
+        df.columns = [c.strip().lower() for c in df.columns]
         
-        # Mapping tên cột thông dụng
-        col_map = {
-            'Temp': 'Temperature', 'T': 'Temperature', 'Nhietdo': 'Temperature',
-            'Hum': 'Humidity', 'H': 'Humidity', 'Doam': 'Humidity'
+        # 2. Map tên cột từ file CSV của bạn sang tên chuẩn của hệ thống
+        rename_map = {
+            'temp': 'Temperature',
+            'hum': 'Humidity',
+            'next_temp': 'Next_Temp',  # Cột quan trọng từ file của bạn
+            't': 'Temperature',
+            'h': 'Humidity'
         }
-        df.rename(columns=col_map, inplace=True)
-        
-        # Kiểm tra cột bắt buộc
+        df.rename(columns=rename_map, inplace=True)
+
+        # 3. Kiểm tra xem có đủ dữ liệu đầu vào không
         if 'Temperature' not in df.columns or 'Humidity' not in df.columns:
             return pd.DataFrame()
 
-        # Lọc nhiễu
+        # 4. Ép kiểu dữ liệu sang số (tránh lỗi nếu file có lẫn chữ cái lạ)
+        df['Temperature'] = pd.to_numeric(df['Temperature'], errors='coerce')
+        df['Humidity'] = pd.to_numeric(df['Humidity'], errors='coerce')
+        
+        # Nếu có cột Next_Temp, cũng ép kiểu luôn
+        if 'Next_Temp' in df.columns:
+            df['Next_Temp'] = pd.to_numeric(df['Next_Temp'], errors='coerce')
+
+        # 5. Lọc bỏ dữ liệu nhiễu (NaN)
+        df.dropna(subset=['Temperature', 'Humidity'], inplace=True)
+        
+        # Lọc bỏ các giá trị cảm biến vô lý (ví dụ: nhiệt độ 1000 độ)
         df = df[(df['Temperature'] > -10) & (df['Temperature'] < 60)]
         df = df[(df['Humidity'] > 0) & (df['Humidity'] <= 100)]
         
         return df
 
-    def predict_trend(self, current_temp: float, current_hum: float) -> str:
-        """Dự báo xu hướng nhiệt độ."""
+    def predict_next(self, current_temp, current_hum):
+        """Trả về: (Nhiệt độ dự báo, Lời khuyên)"""
         if not self.is_trained:
-            return "Chưa có dữ liệu học."
+            return current_temp, "Chưa có kiến thức"
         
         try:
-            X_in = self.scaler.transform([[current_temp, current_hum]])
-            pred_temp = self.regressor.predict(X_in)[0]
+            # --- SỬA LỖI TẠI ĐÂY ---
+            # Thay vì đưa list [[temp, hum]], ta tạo DataFrame có tên cột khớp với lúc train
+            input_data = pd.DataFrame(
+                [[current_temp, current_hum]], 
+                columns=['Temperature', 'Humidity']
+            )
+            
+            # Giờ thì transform sẽ không còn báo Warning nữa
+            X_new = self.scaler.transform(input_data)
+            pred_temp = self.model.predict(X_new)[0]
+            
+            # --- Phần dưới giữ nguyên ---
             delta = pred_temp - current_temp
             
-            if delta > 0.15: return "Dự báo: Tăng nhiệt 📈"
-            if delta < -0.15: return "Dự báo: Giảm nhiệt 📉"
-            return "Dự báo: Ổn định ➡️"
-        except:
-            return "Lỗi dự đoán"
+            trend = "Ổn định"
+            if delta > 0.15: trend = f"Tăng nhẹ (+{delta:.2f})"
+            if delta > 0.5: trend = f"TĂNG MẠNH (+{delta:.2f})"
+            if delta < -0.15: trend = f"Giảm nhẹ ({delta:.2f})"
+            
+            return pred_temp, trend
+        except Exception as e:
+            # Log.error(f"Lỗi dự báo: {e}") # Có thể bỏ comment để debug
+            return current_temp, "Lỗi"
 
+    # (Giữ nguyên các hàm save_model, load_model cũ)
+    def save_model(self):
+        try:
+            payload = {"model": self.regressor, "scaler": self.scaler, "stats": self.training_stats, "timestamp": datetime.now()}
+            with open(CONFIG.MODEL_PATH, "wb") as f: pickle.dump(payload, f)
+        except Exception as e: LogSystem.error(f"Lỗi lưu model: {e}")
+
+    def load_model(self):
+        if os.path.exists(CONFIG.MODEL_PATH):
+            try:
+                with open(CONFIG.MODEL_PATH, "rb") as f:
+                    payload = pickle.load(f)
+                    self.regressor = payload["model"]
+                    self.scaler = payload["scaler"]
+                    self.training_stats = payload.get("stats", {})
+                    self.is_trained = True
+                LogSystem.success("Đã khôi phục não bộ AI.")
+            except: pass
 # =============================================================================
 # 5. PERSONALITY ENGINE (TRÍ TUỆ CẢM XÚC & NLP)
 # =============================================================================
@@ -373,10 +484,9 @@ class PersonalityEngine:
 
 class AutomationController:
     """
-    Chịu trách nhiệm ra quyết định tự động dựa trên dữ liệu cảm biến.
+    Điều khiển thiết bị dựa trên cả ngưỡng (Threshold) và dự báo AI (Prediction).
     """
     def __init__(self):
-        # Lưu trạng thái nội bộ để tránh spam lệnh
         self.device_states = {
             DeviceType.FAN_COOLING: DeviceAction.OFF,
             DeviceType.FAN_EXHAUST: DeviceAction.OFF,
@@ -385,57 +495,59 @@ class AutomationController:
         }
         self.last_run = datetime.now()
 
-    def process(self, env: SensorData, trend: str) -> List[CommandSignal]:
+    def process(self, env: SensorData, brain: EcoBrain) -> List[CommandSignal]:
         commands = []
-        
-        # Kiểm tra cooldown (tránh bật tắt liên tục gây hại thiết bị)
         if (datetime.now() - self.last_run).total_seconds() < CONFIG.AUTOMATION_COOLDOWN:
             return commands
 
-        # --- LOGIC 1: QUẢN LÝ NHIỆT ĐỘ ---
+        # 1. Lấy dự báo từ AI
+        pred_temp, trend_text = brain.predict_next(env.temperature, env.humidity)
         
-        # TRƯỜNG HỢP: QUÁ NÓNG (> 30 độ)
-        if env.temperature > CONFIG.TEMP_HOT_LIMIT:
-            # Bật Quạt Mát (Fan 1)
-            if self.device_states[DeviceType.FAN_COOLING] == DeviceAction.OFF:
-                commands.append(CommandSignal(DeviceType.FAN_COOLING, DeviceAction.ON, "Nhiệt độ cao (>30)"))
+        # LOGIC AI: Pre-emptive Cooling (Làm mát đón đầu)
+        # Nếu nhiệt độ hiện tại chưa tới mức nóng (VD: 29 độ), 
+        # nhưng AI đoán sắp tới sẽ lên 30.5 độ -> Bật quạt ngay từ bây giờ.
+        ai_warning_hot = (env.temperature >= 28.0 and pred_temp > CONFIG.TEMP_HOT_LIMIT)
+
+        # --- QUẢN LÝ NHIỆT ĐỘ ---
+        
+        # BẬT QUẠT MÁT KHI: Nóng thực tế HOẶC AI cảnh báo sắp nóng
+        if env.temperature > CONFIG.TEMP_HOT_LIMIT or ai_warning_hot:
+            reason = "Quá nóng (>30°C)" if env.temperature > CONFIG.TEMP_HOT_LIMIT else f"AI dự báo nhiệt tăng lên {pred_temp:.1f}°C"
             
-            # Nếu CỰC NÓNG (> 33 độ) -> Bật thêm Quạt Hút (Fan 2)
-            if env.temperature > CONFIG.TEMP_EXTREME_LIMIT:
+            if self.device_states[DeviceType.FAN_COOLING] == DeviceAction.OFF:
+                commands.append(CommandSignal(DeviceType.FAN_COOLING, DeviceAction.ON, reason))
+                
+            # Cực nóng -> Bật thêm hút
+            if env.temperature > CONFIG.TEMP_EXTREME_LIMIT or pred_temp > CONFIG.TEMP_EXTREME_LIMIT:
                 if self.device_states[DeviceType.FAN_EXHAUST] == DeviceAction.OFF:
-                    commands.append(CommandSignal(DeviceType.FAN_EXHAUST, DeviceAction.ON, "Nhiệt độ cực cao (>33)"))
+                    commands.append(CommandSignal(DeviceType.FAN_EXHAUST, DeviceAction.ON, "Cảnh báo nhiệt độ cao"))
 
-        # TRƯỜNG HỢP: QUÁ LẠNH (< 20 độ)
+        # BẬT SƯỞI
         elif env.temperature < CONFIG.TEMP_COLD_LIMIT:
-            # Bật Sưởi
             if self.device_states[DeviceType.HEATER] == DeviceAction.OFF:
-                commands.append(CommandSignal(DeviceType.HEATER, DeviceAction.ON, "Nhiệt độ thấp (<20)"))
-            # Tắt quạt mát nếu đang bật
+                commands.append(CommandSignal(DeviceType.HEATER, DeviceAction.ON, "Nhiệt độ thấp"))
             if self.device_states[DeviceType.FAN_COOLING] == DeviceAction.ON:
-                commands.append(CommandSignal(DeviceType.FAN_COOLING, DeviceAction.OFF, "Tránh gió lạnh"))
+                commands.append(CommandSignal(DeviceType.FAN_COOLING, DeviceAction.OFF, "Tắt quạt để sưởi ấm"))
 
-        # TRƯỜNG HỢP: ỔN ĐỊNH (22 - 28 độ) -> Tắt các thiết bị làm mát/sưởi để tiết kiệm điện
-        elif CONFIG.TEMP_IDEAL_MIN <= env.temperature <= CONFIG.TEMP_IDEAL_MAX:
+        # TRẠNG THÁI LÝ TƯỞNG -> Tắt hết để tiết kiệm điện
+        elif CONFIG.TEMP_IDEAL_MIN <= env.temperature <= CONFIG.TEMP_IDEAL_MAX and not ai_warning_hot:
+            # Chỉ tắt nếu AI không cảnh báo nóng
             if self.device_states[DeviceType.FAN_COOLING] == DeviceAction.ON:
-                commands.append(CommandSignal(DeviceType.FAN_COOLING, DeviceAction.OFF, "Nhiệt độ lý tưởng"))
+                commands.append(CommandSignal(DeviceType.FAN_COOLING, DeviceAction.OFF, "Môi trường ổn định"))
             if self.device_states[DeviceType.FAN_EXHAUST] == DeviceAction.ON:
-                commands.append(CommandSignal(DeviceType.FAN_EXHAUST, DeviceAction.OFF, "Nhiệt độ lý tưởng"))
+                commands.append(CommandSignal(DeviceType.FAN_EXHAUST, DeviceAction.OFF, "Môi trường ổn định"))
             if self.device_states[DeviceType.HEATER] == DeviceAction.ON:
-                commands.append(CommandSignal(DeviceType.HEATER, DeviceAction.OFF, "Nhiệt độ lý tưởng"))
+                commands.append(CommandSignal(DeviceType.HEATER, DeviceAction.OFF, "Môi trường ổn định"))
 
-        # --- LOGIC 2: QUẢN LÝ ĐỘ ẨM ---
-        
-        # KHÔ (< 50%) -> Bật Phun sương
+        # --- QUẢN LÝ ĐỘ ẨM (Giữ nguyên logic cũ) ---
         if env.humidity < CONFIG.HUM_DRY_LIMIT:
             if self.device_states[DeviceType.MIST] == DeviceAction.OFF:
                 commands.append(CommandSignal(DeviceType.MIST, DeviceAction.ON, "Độ ẩm thấp"))
-        
-        # ẨM CAO (> 80%) -> Tắt Phun sương
         elif env.humidity > CONFIG.HUM_WET_LIMIT:
             if self.device_states[DeviceType.MIST] == DeviceAction.ON:
                 commands.append(CommandSignal(DeviceType.MIST, DeviceAction.OFF, "Độ ẩm cao"))
 
-        # Cập nhật trạng thái và thời gian
+        # Cập nhật state
         for cmd in commands:
             self.device_states[cmd.device] = cmd.action
         
@@ -445,7 +557,6 @@ class AutomationController:
         return commands
 
     def update_state_manual(self, device: DeviceType, action: DeviceAction):
-        """Cập nhật trạng thái khi người dùng điều khiển thủ công."""
         self.device_states[device] = action
 
 # =============================================================================
@@ -564,49 +675,33 @@ class EcoSmartServer:
             return False
 
     async def background_sensor_polling(self):
-        """
-        Luồng chạy ngầm: Liên tục hỏi ESP32 về nhiệt độ/độ ẩm.
-        """
         LogSystem.info("Khởi động dịch vụ giám sát cảm biến...")
-        
         async with aiohttp.ClientSession() as session:
             while self.is_running:
                 start_time = time.time()
                 try:
-                    # 1. Poll dữ liệu
                     async with session.get(f"{CONFIG.ESP32_BASE_URL}/status", timeout=CONFIG.POLLING_INTERVAL) as resp:
                         if resp.status == 200:
                             data = await resp.json()
-                            
-                            # Cập nhật trạng thái môi trường
                             self.current_env.temperature = float(data.get('temp', 0))
                             self.current_env.humidity = float(data.get('hum', 0))
                             self.current_env.timestamp = datetime.now()
-                            
-                            # Log nhẹ (Debug)
-                            # print(f"Sensor: {self.current_env.temperature}°C | {self.current_env.humidity}%")
-
                 except Exception:
-                    # Nếu lỗi (mất kết nối), giữ nguyên giá trị cũ hoặc cảnh báo
-                    # LogSystem.warning("Mất kết nối với cảm biến ESP32. Đang thử lại...")
                     pass
 
-                # 2. Chạy logic tự động hóa (Automation)
-                trend = self.brain.predict_trend(self.current_env.temperature, self.current_env.humidity)
-                auto_commands = self.controller.process(self.current_env, trend)
+                # --- SỬA ĐỔI Ở ĐÂY ---
+                # Truyền cả object 'brain' vào process để controller tham khảo ý kiến AI
+                auto_commands = self.controller.process(self.current_env, self.brain)
+                # ---------------------
                 
-                # 3. Thực thi các lệnh tự động
                 for cmd in auto_commands:
                     await self.execute_device_command(cmd)
-                    # Thông báo chat
                     await self.sio.emit('ai_chat_reply', {
-                        'reply': f"🤖 Tự động: Tôi vừa {cmd.action.value} {cmd.device.value} vì {cmd.reason}."
+                        'reply': f"🤖 Tự động: {cmd.reason} -> {cmd.action.value.upper()} {cmd.device.value}."
                     })
 
-                # Ngủ cho đến chu kỳ tiếp theo
                 elapsed = time.time() - start_time
-                sleep_time = max(0, CONFIG.POLLING_INTERVAL - elapsed)
-                await asyncio.sleep(sleep_time)
+                await asyncio.sleep(max(0, CONFIG.POLLING_INTERVAL - elapsed))
 
     async def start(self):
         """Khởi động toàn bộ hệ thống."""
